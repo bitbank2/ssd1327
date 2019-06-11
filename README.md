@@ -10,7 +10,7 @@ The purpose of this code is to easily control SSD1327 128x128 OLED
 displays using a minimum of FLASH and RAM. The code supports SPI, I2C and bit
 bang connections using any 2 GPIO pins. Instead of adding support for this display
 to a more generalized library, I chose to create stand alone code that could be
-as small as possible.<>
+as small as possible.<br>
 
 This code makes use of my BitBang_I2C library and it must be installed as well.<br>
 https://github.com/bitbank2/BitBang_I2C<br>
