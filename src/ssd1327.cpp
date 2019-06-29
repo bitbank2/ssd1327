@@ -32,9 +32,9 @@ void ssd1327Power(byte bOn);
 // Comment out this line to gain 1K of RAM and not use a backing buffer
 //
 //#define USE_BACKBUFFER
-#ifndef __AVR__
-#define USE_BACKBUFFER
-#endif // !__AVR__
+//#ifndef __AVR__
+//#define USE_BACKBUFFER
+//#endif // !__AVR__
 
 // small (8x8) font
 const byte ucFont[]PROGMEM = {
@@ -312,7 +312,7 @@ else
   Wire.setClock(iSpeed); // use high speed I2C mode (default is 100Khz)
 }
 #endif
-  ssd1327Power(1); // turn on the power
+  ssd1327Power(0); // turn off the power
   uc[0] = 0x00; // command
   uc[1] = 0xa0; // GDDRAM mapping
   if (bFlip)
@@ -320,12 +320,10 @@ else
   else
      uc[2] = 0x53; // default (top to bottom, left to right mapping)
   _I2CWrite(uc, 3);
-  if (bInvert)
-  {
-    uc[0] = 0; // command
-    uc[1] = 0xa7; // invert command
-    _I2CWrite(uc, 2);
-  }
+  ssd1327Power(1); // turn on the power
+  uc[0] = 0; // command
+  uc[1] = (bInvert) ? 0xa7:0xa4; // invert command / normal display
+  _I2CWrite(uc, 2);
 } /* ssd1327Init() */
 //
 // Sends a command to turn on or off the OLED display
@@ -454,7 +452,7 @@ byte bFlipped = false;
 // rotate the data and send it to the display
   for (y=0; y<8; y++) // 8 lines of 8 pixels
   {
-     oledSetPosition(0, y);
+     ssd1327SetPosition(0, y);
      for (j=0; j<8; j++) // do 8 sections of 16 columns
      {
          s = &pBMP[iOffBits + (j*2) + (y * iPitch*8)]; // source line
@@ -475,7 +473,7 @@ byte bFlipped = false;
             } // for q
             s++; // next source byte
          } // for x
-         oledWriteDataBlock(ucTemp, 16);
+         ssd1327WriteDataBlock(ucTemp, 16);
      } // for j
   } // for y
   return 0;
@@ -495,7 +493,7 @@ unsigned char c, *s, *d, ucTemp2[8], ucTemp[40];
     if (iSize == FONT_NORMAL || iSize == FONT_SMALL) // 8x8 and 6x8 font
     {
        uint8_t cx = (iSize == FONT_NORMAL) ? 8:6;
-       uint8_t *pFont = (iSize == FONT_NORMAL) ? ucFont:ucSmallFont;
+       uint8_t *pFont = (iSize == FONT_NORMAL) ? (uint8_t*)ucFont:(uint8_t*)ucSmallFont;
        i = 0;
        while (x < 128-7 && szMsg[i] != 0)
        {
@@ -594,9 +592,9 @@ uint8_t *pSrc = ucScreen;
         if (bNeedPos) // need to reposition output cursor?
         {
            bNeedPos = 0;
-           oledSetPosition(x*16, y);
+           ssd1327SetPosition(x*16, y);
         }
-        oledWriteDataBlock(pBuffer, 16);
+        ssd1327WriteDataBlock(pBuffer, 16);
       }
       else
       {
@@ -641,11 +639,11 @@ unsigned char temp[16];
     } // for x
   } // for y
 #ifdef USE_BACKBUFFER
-   memset(ucScreen, ucData, 1024);
+   memset(ucScreen, ucColor, 1024);
 #endif
 } /* ssd1327Fill() */
 
-#ifdef USE_BACKBUFFER
+#ifdef FUTURE
 void oledDrawLine(int x1, int y1, int x2, int y2)
 {
   int temp, i;
@@ -694,8 +692,8 @@ void oledDrawLine(int x1, int y1, int x2, int y2)
            mask >>= 1;
         if (mask == 0) // we've moved outside the current row, write the data we changed
         {
-           oledSetPosition(x, y>>3);
-           oledWriteDataBlock(pStart,  (int)(p-pStart)); // write the row we changed
+           ssd1327SetPosition(x, y>>3);
+           ssd1327WriteDataBlock(pStart,  (int)(p-pStart)); // write the row we changed
            x = x1+1; // we've already written the byte at x1
            y1 = y+yinc;
            p += (yinc > 0) ? 128 : -128;
@@ -707,8 +705,8 @@ void oledDrawLine(int x1, int y1, int x2, int y2)
     } // for x1    
    if (p != pStart) // some data needs to be written
    {
-     oledSetPosition(x, y>>3);
-     oledWriteDataBlock(pStart, (int)(p-pStart));
+     ssd1327SetPosition(x, y>>3);
+     ssd1327WriteDataBlock(pStart, (int)(p-pStart));
    }
   }
   else {
@@ -743,8 +741,8 @@ void oledDrawLine(int x1, int y1, int x2, int y2)
         if (bOld != bNew)
         {
           p[0] = bNew; // save to RAM
-          oledSetPosition(x, y1>>3);
-          oledWriteDataBlock(&bNew, 1);
+          ssd1327SetPosition(x, y1>>3);
+          ssd1327WriteDataBlock(&bNew, 1);
         }
         p += 128; // next line
         bOld = bNew = p[0];
@@ -756,8 +754,8 @@ void oledDrawLine(int x1, int y1, int x2, int y2)
         if (bOld != bNew) // write the last byte we modified if it changed
         {
           p[0] = bNew; // save to RAM
-          oledSetPosition(x, y1>>3);
-          oledWriteDataBlock(&bNew, 1);         
+          ssd1327SetPosition(x, y1>>3);
+          ssd1327WriteDataBlock(&bNew, 1);         
         }
         p += xinc;
         x += xinc;
@@ -767,10 +765,9 @@ void oledDrawLine(int x1, int y1, int x2, int y2)
     if (bOld != bNew) // write the last byte we modified if it changed
     {
       p[0] = bNew; // save to RAM
-      oledSetPosition(x, y2>>3);
-      oledWriteDataBlock(&bNew, 1);        
+      ssd1327SetPosition(x, y2>>3);
+      ssd1327WriteDataBlock(&bNew, 1);        
     }
   } // y major case
 } /* oledDrawLine() */
-#endif // USE_BACKBUFFER
-
+#endif // FUTURE
