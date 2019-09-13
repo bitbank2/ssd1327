@@ -20,6 +20,9 @@
 #include <Arduino.h>
 #ifdef __AVR__
 #include <avr/pgmspace.h>
+#else
+// On systems with enough RAM (not AVR), we allocate a static 8K back buffer
+#define USE_BACKBUFFER
 #endif
 #include <BitBang_I2C.h>
 #ifndef __AVR_ATtiny85__
@@ -27,14 +30,12 @@
 #include <SPI.h>
 #endif
 #include <ssd1327.h>
+
+#ifdef USE_BACKBUFFER
+static uint8_t ucBackbuffer[8192];
+#endif
+
 void ssd1327Power(byte bOn);
-//
-// Comment out this line to gain 1K of RAM and not use a backing buffer
-//
-//#define USE_BACKBUFFER
-//#ifndef __AVR__
-//#define USE_BACKBUFFER
-//#endif // !__AVR__
 
 // small (8x8) font
 const byte ucFont[]PROGMEM = {
@@ -127,26 +128,20 @@ const byte ucSmallFont[]PROGMEM = {
 
 // some globals
 static int iCSPin, iDCPin, iResetPin;
-static int iScreenOffset; // current write offset of screen data
-#ifdef USE_BACKBUFFER
-static unsigned char ucScreen[1024]; // local copy of the image buffer
-#endif
-static int oled_flip, oled_addr;
+static int iMaxX, iMaxY, iPitch;
+static int oled_type, oled_flip, oled_addr;
 static int iSDAPin, iSCLPin;
-#define MAX_CACHE 32
-static byte bCache[MAX_CACHE] = {0x40}; // for faster character drawing
-static byte bEnd = 1;
 static void ssd1327WriteCommand(unsigned char c);
 
 // use only the bitbang version on ATtiny85 to avoid linking wire library
 #ifdef __AVR_ATtiny85__
-static void _I2CWrite(unsigned char *pData, int iLen)
+static void oledWrite(unsigned char *pData, int iLen)
 {
   I2CWrite(oled_addr, pData, iLen);
-} /* _I2CWrite() */
+} /* oledWrite() */
 #else
 // Wrapper function to write I2C data on Arduino
-static void _I2CWrite(unsigned char *pData, int iLen)
+static void oledWrite(unsigned char *pData, int iLen)
 {
   if (iCSPin != -1) // we're writing to SPI, treat it differently
   {
@@ -175,50 +170,9 @@ static void _I2CWrite(unsigned char *pData, int iLen)
        Wire.endTransmission();
     }
   } // I2C
-} /* _I2CWrite() */
+} /* oledWrite() */
 #endif // !__AVR_ATtiny85__
 
-// For SH1106 read_modify_write() operation
-static void _I2CRead(unsigned char *pData, int iLen)
-{
-    if (iSDAPin != -1 && iSCLPin != -1)
-    {  
-       I2CRead(oled_addr, pData, iLen);
-    }
-#ifndef __AVR_ATtiny85__
-    else
-    {  
-       Wire.requestFrom(oled_addr, iLen);
-       while (iLen)
-       {
-         *pData++ = Wire.read();
-         iLen--;
-       }
-    }
-#endif
-} /* _I2CRead() */
-
-static void oledCachedFlush(void)
-{
-       _I2CWrite(bCache, bEnd); // write the old data
-#ifdef USE_BACKBUFFER
-       memcpy(&ucScreen[iScreenOffset], &bCache[1], bEnd-1);
-       iScreenOffset += (bEnd - 1);
-#endif
-       bEnd = 1;
-} /* oledCachedFlush() */
-
-static void oledCachedWrite(byte *pData, byte bLen)
-{
-
-   if (bEnd + bLen > MAX_CACHE) // need to flush it
-   {
-       oledCachedFlush(); // write the old data
-   }
-   memcpy(&bCache[bEnd], pData, bLen);
-   bEnd += bLen;
-  
-} /* oledCachedWrite() */
 //
 // Turn off the display
 //
@@ -228,20 +182,61 @@ uint8_t uc[2];
 
     uc[0] = 0; // command
     uc[1] = 0xae; // display off
-    _I2CWrite(uc, 2);
+    oledWrite(uc, 2);
 
 } /* oledShutdown() */
+//
+// ssd1322
+//
+static const uint8_t ssd1322_init_table[] = {
+	2, 0xfd, 0x12, // unlock the controller
+        1, 0xa4, // set display off
+//        1, 0xb9, // default grayscale mode
+	2, 0xb3, 0x91, // set clock divider
+	2, 0xca, 0x3f, // set COMS multiplex ratio 1/64
+	2, 0xa2, 0x00, // set display offset  
+	2, 0xa1, 0x00, // set display start line
+	3, 0xa0, 0x14, 0x11, // set display remap
+	2, 0xb5, 0x00, // disable GPIO
+	2, 0xab, 0x01, // select external VDD regulator (none)
+	3, 0xb4, 0xa0, 0xfd, // external VSL display enhancement
+	2, 0xb1, 0xe2, // set phase length
+	3, 0xd1, 0x82, 0x20, // display enahancement B
+	1, 0xa6, // set normal display mode
+	0
+};
+void ssd1322Init(void)
+{
+uint8_t *s = (uint8_t *)ssd1322_init_table;
+uint8_t ucTemp[8], iCount;
+
+   iCount = 1;
+   ucTemp[0] = 0x40; // pretend it's I2C data
+   while (iCount)
+   {
+     iCount = *s++;
+     if (iCount != 0)
+     {
+       ssd1327WriteCommand(*s++);
+       memcpy(&ucTemp[1], s, iCount-1);
+       oledWrite(ucTemp, iCount);
+       s += iCount-1;
+     }
+   }
+	
+} /* ssd1322Init() */
+
 #ifndef __AVR_ATtiny85__
 //
 // Initialize the OLED controller for SPI mode
 //
-void ssd1327SPIInit(int iDC, int iCS, int iReset, int bFlip, int bInvert, int32_t iSpeed)
+void ssd1327SPIInit(int iType, int iDC, int iCS, int iReset, int bFlip, int bInvert, int32_t iSpeed)
 {
-uint8_t uc[32], *s;
-int iLen;
+uint8_t uc[32];
 
   iDCPin = iDC;
   iCSPin = iCS;
+  oled_type = iType;
   iResetPin = iReset;
   oled_flip = bFlip;
 
@@ -267,22 +262,36 @@ int iLen;
 //  SPI.setBitOrder(MSBFIRST);
 //  SPI.setDataMode(SPI_MODE0);
 
+  if (oled_type == OLED_256x64)
+  {
+    iMaxX = 256;
+    iMaxY = 64;
+    iPitch = 128;
+    ssd1322Init();
+  }
+  else
+  {
+    iPitch = 64;
+    iMaxX = 128;
+    iMaxY = 128;
+  }
+
   ssd1327Power(1);
 
   if (bInvert)
   {
     uc[0] = 0; // command
     uc[1] = 0xa7; // invert command
-    _I2CWrite(uc, 2);
+    oledWrite(uc, 2);
   }
   if (bFlip) // rotate display 180
   {
     uc[0] = 0; // command
     uc[1] = 0xa0;
-    _I2CWrite(uc, 2);
+    oledWrite(uc, 2);
     uc[0] = 0;
     uc[1] = 0xc0;
-    _I2CWrite(uc, 2);
+    oledWrite(uc, 2);
   }
 
 } /* ssd1327SPIInit() */
@@ -290,12 +299,14 @@ int iLen;
 //
 // Initializes the OLED controller
 //
-void ssd1327Init(int iAddr, int bFlip, int bInvert, int sda, int scl, int32_t iSpeed)
+void ssd1327Init(int iType, int iAddr, int bFlip, int bInvert, int sda, int scl, int32_t iSpeed)
 {
 unsigned char uc[4];
 
   oled_addr = iAddr;
   oled_flip = bFlip;
+  oled_type = iType;
+
   iSDAPin = sda;
   iSCLPin = scl;
 // Disable SPI mode code
@@ -319,11 +330,11 @@ else
      uc[2] = 0x40;
   else
      uc[2] = 0x53; // default (top to bottom, left to right mapping)
-  _I2CWrite(uc, 3);
+  oledWrite(uc, 3);
   ssd1327Power(1); // turn on the power
   uc[0] = 0; // command
   uc[1] = (bInvert) ? 0xa7:0xa4; // invert command / normal display
-  _I2CWrite(uc, 2);
+  oledWrite(uc, 2);
 } /* ssd1327Init() */
 //
 // Sends a command to turn on or off the OLED display
@@ -343,7 +354,7 @@ unsigned char buf[2];
 
   buf[0] = 0x00; // command introducer
   buf[1] = c;
-  _I2CWrite(buf, 2);
+  oledWrite(buf, 2);
 } /* ssd1327WriteCommand() */
 
 static void ssd1327WriteCommand2(unsigned char c, unsigned char d)
@@ -353,28 +364,46 @@ unsigned char buf[3];
   buf[0] = 0x00;
   buf[1] = c;
   buf[2] = d;
-  _I2CWrite(buf, 3);
+  oledWrite(buf, 3);
 } /* ssd1327WriteCommand2() */
 
 //
 // Send commands to position the "cursor" (aka memory write address)
 // to the given row and column as well as the ending col/row
 //
-static void ssd1327SetPosition(uint8_t x, uint8_t y, uint8_t cx, uint8_t cy)
+static void ssd1327SetPosition(int x, int y, int cx, int cy)
 {
 unsigned char buf[8];
 
-#ifdef USE_BACKBUFFER 
-  iScreenOffset = (y*64)+x;
-#endif
   buf[0] = 0x00; // command introducer
   buf[1] = 0x15; // column start/end
-  buf[2] = x/2; // start address
-  buf[3] = ((x+cx)/2)-1; // end address
-  buf[4] = 0x75; // row start/end
-  buf[5] = y; // start row
-  buf[6] = y+cy-1; // end row
-  _I2CWrite(buf, 7);
+  if (oled_type == OLED_256x64)
+  {
+    oledWrite(buf, 2);
+    buf[0] = 0x40; // data
+    buf[1] = 28 + (x/4); // strange SSD1322 mapping
+    buf[2] = 28 + (((x+cx)/4)-1);
+    oledWrite(buf, 3); // need to write this part as data
+    buf[0] = 0x00; // command
+    buf[1] = 0x75; // set row
+    oledWrite(buf, 2);
+    buf[0] = 0x40; // data
+    buf[1] = y;
+    buf[2] = y+cy-1;
+    oledWrite(buf, 3);
+    buf[0] = 0x00; // command
+    buf[1] = 0x5c; // enable RAM write
+    oledWrite(buf, 2);
+  }
+  else
+  {
+    buf[2] = x/2; // start address
+    buf[3] = (uint8_t)(((x+cx)/2)-1); // end address
+    buf[4] = 0x75; // row start/end
+    buf[5] = y; // start row
+    buf[6] = y+cy-1; // end row
+    oledWrite(buf, 7);
+  }
 } /* ssd1327SetPosition() */
 
 //
@@ -389,27 +418,8 @@ unsigned char ucTemp[129];
 // Copying the data has the benefit in SPI mode of not letting
 // the original data get overwritten by the SPI.transfer() function
   memcpy(&ucTemp[1], ucBuf, iLen);
-  _I2CWrite(ucTemp, iLen+1);
-  // Keep a copy in local buffer
-#ifdef USE_BACKBUFFER
-  memcpy(&ucScreen[iScreenOffset], ucBuf, iLen);
-  iScreenOffset += iLen;
-#endif
+  oledWrite(ucTemp, iLen+1);
 } /* ssd1327WriteDataBlock() */
-
-// Set an individual pixel to a specific color
-// A compromise to avoid needing an 8K back buffer
-// A pair of pixels (a byte) is set
-// The 128x128 display is remapped as 64x128
-void ssd1327SetPixel(int x, int y, unsigned char ucColor)
-{
-uint8_t ucTemp[2];
-
-  ssd1327SetPosition(x*2, y, 2, 1);
-  ucTemp[0] = 0x40; // data
-  ucTemp[1] = ucColor | (ucColor << 4);
-  _I2CWrite(ucTemp, 2);
-} /* ssd1327SetPixel() */
 
 #ifdef FUTURE
 //
@@ -482,20 +492,38 @@ byte bFlipped = false;
 //
 // Draw a string of normal (8x8), small (6x8) or large (16x32) characters
 // At the given col+row
+// For AVR systems (very little RAM), the text gets drawn directly on the display
+// For non-AVR systems, the text is written to the back buffer and transparent text
+// can be enabled by setting the background color to -1
 //
-void ssd1327WriteString(uint8_t x, uint8_t y, char *szMsg, uint8_t iSize, uint8_t ucFG, uint8_t ucBG)
+void ssd1327WriteString(uint8_t x, uint8_t y, char *szMsg, uint8_t iSize, int ucFG, int ucBG)
 {
 int i, iFontOff;
 int tx, ty;
 unsigned char uc, ucMask;
-unsigned char c, *s, *d, ucTemp2[8], ucTemp[40];
+unsigned char c, *s, *d, ucTemp2[8];
+#ifndef USE_BACKBUFFER
+unsigned char ucTemp[40];
+#endif
+uint8_t first_shift, second_shift;
 
+  if (oled_type == OLED_256x64)
+  {
+    first_shift = 4; second_shift = 0;
+  }
+  else // reversed nibble order
+  {
+    first_shift = 0; second_shift = 4;
+  }
+#ifdef __AVR__
+  if (ucBG == -1) ucBG = 0; // no transparent text allowed
+#endif
     if (iSize == FONT_NORMAL || iSize == FONT_SMALL) // 8x8 and 6x8 font
     {
        uint8_t cx = (iSize == FONT_NORMAL) ? 8:6;
        uint8_t *pFont = (iSize == FONT_NORMAL) ? (uint8_t*)ucFont:(uint8_t*)ucSmallFont;
        i = 0;
-       while (x < 128-7 && szMsg[i] != 0)
+       while (x < iMaxX-7 && szMsg[i] != 0)
        {
          ssd1327SetPosition(x, y, cx, 8);
          c = (unsigned char)szMsg[i];
@@ -503,26 +531,56 @@ unsigned char c, *s, *d, ucTemp2[8], ucTemp[40];
          // we can't directly use the pointer to FLASH memory, so copy to a local buffer
          memcpy_P(ucTemp2, &pFont[iFontOff], cx);
          s = ucTemp2;
+#ifdef USE_BACKBUFFER
+         d = &ucBackbuffer[(y*iPitch) + (x/2)];
+#else
          d = &ucTemp[0];
          *d++ = 0x40; // data introducer
+#endif
          ucMask = 1;
          for (ty=0; ty<8; ty++)
          {
+           if (ucBG == -1) // transparent text
+           {
+           for (tx=0; tx<cx; tx+=2)
+           {
+              if (s[tx] & ucMask) // foreground
+              {
+                d[0] &= (0xf0 >> first_shift);
+                d[0] |= (ucFG << first_shift);
+              }
+              if (s[tx+1] & ucMask)
+              {
+                d[0] &= (0xf0 >> second_shift);
+                d[0] |= (ucFG << second_shift);
+              }
+              d++;
+           } // for tx
+           }
+           else // regular text
+           {
            for (tx=0; tx<cx; tx+=2)
            {
               if (s[tx] & ucMask)
-                 uc = ucFG;
+                 uc = ucFG << first_shift;
               else
-                 uc = ucBG;
+                 uc = ucBG << first_shift;
               if (s[tx+1] & ucMask)
-                 uc |= (ucFG << 4);
+                 uc |= (ucFG << second_shift);
               else
-                 uc |= (ucBG << 4);
+                 uc |= (ucBG << second_shift);
               *d++ = uc; // store pixel pair
            } // for tx
+           }
            ucMask <<= 1;
+#ifdef USE_BACKBUFFER
+           d -= cx/2;
+           d += iPitch; // move to next line
+#endif
          } // for ty
-         _I2CWrite(ucTemp, 1+(cx*4)); // write character pattern
+#ifndef USE_BACKBUFFER
+         oledWrite(ucTemp, 1+(cx*4)); // write character pattern
+#endif
          x += cx;
          i++;
        }
@@ -530,7 +588,7 @@ unsigned char c, *s, *d, ucTemp2[8], ucTemp[40];
     else if (iSize == FONT_LARGE) // 16x16 font
     {
       i = 0;
-      while (x < 128-15 && szMsg[i] != 0)
+      while (x < iMaxX-15 && szMsg[i] != 0)
       {
 // stretch the 'normal' font instead of using the big font
           int tx, ty;
@@ -542,8 +600,12 @@ unsigned char c, *s, *d, ucTemp2[8], ucTemp[40];
           ucFG |= (ucFG << 4); // 2 pixels at a time
           ucBG |= (ucBG << 4);
           // Stretch the font to double width + double height
-          ucTemp[0] = 0x40; // start of data (write one row at a time)
           ucMask = 1;
+#ifdef USE_BACKBUFFER
+          d = &ucBackbuffer[(y*iPitch)+(x/2)];
+#else
+          ucTemp[0] = 0x40; // start of data (write one row at a time)
+#endif
           for (ty=0; ty<8; ty++)
           {
               for (tx=0; tx<8; tx++)
@@ -552,9 +614,19 @@ unsigned char c, *s, *d, ucTemp2[8], ucTemp[40];
                      c = ucFG;
                   else
                      c = ucBG;
+#ifdef USE_BACKBUFFER
+                  if (ucBG != -1 || c == ucFG) // implements transparent text
+                    d[tx] = d[tx+iPitch] = c;
+#else
                   ucTemp[1+tx] = ucTemp[1+tx+8] = c; // double it vertically
+#endif
               }
-              _I2CWrite(ucTemp, 17); // write 2 rows of the character
+#ifdef USE_BACKBUFFER
+              d -= 8;
+              d += iPitch; // move to next line
+#else
+              oledWrite(ucTemp, 17); // write 2 rows of the character
+#endif
               ucMask <<= 1;
           }
           x += 16;
@@ -562,53 +634,48 @@ unsigned char c, *s, *d, ucTemp2[8], ucTemp[40];
        }
     }
 } /* ssd1327WriteString() */
-#ifdef FUTURE
+#ifdef USE_BACKBUFFER
 //
-// Dump a screen's worth of data directly to the display
-// Try to speed it up by comparing the new bytes with the existing buffer
+// Display part of whole of the backbuffer to the visible display
 //
-void oledDumpBuffer(uint8_t *pBuffer)
+void ssd1327ShowBuffer(int x, int y, int w, int h)
 {
-int x, y;
-int iLines, iCols;
-uint8_t bNeedPos;
-#ifdef USE_BACKBUFFER
-uint8_t *pSrc = ucScreen;
-#endif
+int ty;
+uint8_t *s;
 
-  iLines = (oled_type == OLED_128x32 || oled_type == OLED_64x32) ? 4:8;
-  iCols = (oled_type == OLED_64x32) ? 4:8;
-  for (y=0; y<iLines; y++)
+  if (x < 0 || y < 0 || x >= iMaxX || y >= iMaxY || (x+w) > iMaxX || (y+h) > iMaxY)
+    return; // invalid coordinates
+
+  ssd1327SetPosition(x, y, w, h);
+  for (ty=0; ty<h; ty++)
   {
-    bNeedPos = 1; // start of a new line means we need to set the position too
-    for (x=0; x<iCols; x++) // wiring library has a 32-byte buffer, so send 16 bytes so that the data prefix (0x40) can fit
-    {
-#ifdef USE_BACKBUFFER
-      if (memcmp(pSrc, pBuffer, 16) != 0) // doesn't match, need to send it
-#else
-      if (1)
-#endif
-      {
-        if (bNeedPos) // need to reposition output cursor?
-        {
-           bNeedPos = 0;
-           ssd1327SetPosition(x*16, y);
-        }
-        ssd1327WriteDataBlock(pBuffer, 16);
-      }
-      else
-      {
-         bNeedPos = 1; // we're skipping a block, so next time will need to set the new position
-      }
-#ifdef USE_BACKBUFFER
-      pSrc += 16;
-#endif
-      pBuffer += 16;
-    } // for x
+    s = &ucBackbuffer[iPitch * (y+ty)];
+    ssd1327WriteDataBlock(&s[x/2], w/2);
   } // for y
 
-} /* oledDumpBuffer() */
-#endif // FUTURE
+} /* ssd1327ShowBuffer() */
+// Set an individual pixel to a specific color
+// Only affects the backbuffer and must be explicitly
+// displayed later with ssd1327ShowBuffer()
+void ssd1327SetPixel(int x, int y, unsigned char ucColor)
+{
+uint8_t c, *d;
+  d = &ucBackbuffer[(y*iPitch)+x/2];
+  c = d[0];
+  if (x & 1)
+  {
+    c &= 0xf; // right pixel
+    c |= (ucColor << 4); 
+  }
+  else
+  {
+    c &= 0xf0;
+    c |= ucColor;
+  }
+  d[0] = c;
+} /* ssd1327SetPixel() */
+
+#endif // USE_BACKBUFFER
 //
 // Sets the brightness (0=off, 255=brightest)
 //
@@ -624,37 +691,82 @@ void ssd1327SetContrast(unsigned char ucContrast)
 void ssd1327Fill(unsigned char ucColor)
 {
 uint8_t x, y;
-uint8_t iLines, iCols;
 unsigned char temp[16];
 
   ucColor |= (ucColor << 4); // set pixel pair color
   memset(temp, ucColor, 16);
+#ifdef USE_BACKBUFFER
+  memset(ucBackbuffer, ucColor, sizeof(ucBackbuffer));
+#endif
  
-  ssd1327SetPosition(0,0,128,128);
-  for (y=0; y<128; y++)
+  ssd1327SetPosition(0,0,iMaxX,iMaxY);
+  for (y=0; y<iMaxY; y++)
   {
-    for (x=0; x<4; x++)
+    for (x=0; x<iMaxX/32; x++)
     {
       ssd1327WriteDataBlock(temp, 16); 
     } // for x
   } // for y
-#ifdef USE_BACKBUFFER
-   memset(ucScreen, ucColor, 1024);
-#endif
 } /* ssd1327Fill() */
 
-#ifdef FUTURE
-void oledDrawLine(int x1, int y1, int x2, int y2)
+#ifdef USE_BACKBUFFER
+void ssd1327Rectangle(int x, int y, int w, int h, uint8_t ucColor, int bFill)
 {
-  int temp, i;
+int i;
+uint8_t *d;
+
+  ucColor |= (ucColor << 4); // left/right in a byte
+  // check bounds
+  if (x < 0 || x >= iMaxX || x+w > iMaxX)
+     return; // out of bounds
+  if (y < 0 || y >= iMaxY || y+h > iMaxY)
+     return;
+
+  if (bFill)
+  {
+    for (i=0; i<h; i++)
+    {
+      d = &ucBackbuffer[(y+i)*iPitch + (x/2)];
+      memset(d, ucColor, w/2);
+    } // for i
+  } // filled
+  else // outline
+  {
+    // draw top/bottom
+    d = &ucBackbuffer[y*iPitch + (x/2)];
+    memset(d, ucColor, w/2);
+    d = &ucBackbuffer[(y+h-1)*iPitch + (x/2)];
+    memset(d, ucColor, w/2);
+    // draw left/right
+    ucColor &= 0xf;
+    d = &ucBackbuffer[(y*iPitch)+(x/2)];
+    for (i=0; i<h; i++)
+    {
+      d[0] &= 0xf0; // set left pixel
+      d[0] |= ucColor;
+      d[w/2-1] &= 0xf; // set right pixel
+      d[w/2-1] |= (ucColor << 4);
+      d += iPitch;
+    }
+  } // outline
+} /* ssd1327Rectangle() */
+
+uint8_t *ssd1327GetBackbuffer(void)
+{
+  return ucBackbuffer;
+}
+
+void ssd1327DrawLine(int x1, int y1, int x2, int y2, uint8_t ucColor)
+{
+  int temp;
   int dx = x2 - x1;
   int dy = y2 - y1;
   int error;
-  byte *p, *pStart, mask, bOld, bNew;
-  int xinc, yinc;
+  uint8_t *p;
+  int xinc, yinc, shift;
   int y, x;
   
-  if (x1 < 0 || x2 < 0 || y1 < 0 || y2 < 0 || x1 > 127 || x2 > 127 || y1 > 63 || y2 > 63)
+  if (x1 < 0 || x2 < 0 || y1 < 0 || y2 < 0 || x1 >= iMaxX || x2 >= iMaxX || y1 >= iMaxY || y2 >= iMaxY)
      return;
 
   if(abs(dx) > abs(dy)) {
@@ -678,36 +790,25 @@ void oledDrawLine(int x1, int y1, int x2, int y2)
       dy = -dy;
       yinc = -1;
     }
-    p = pStart = &ucScreen[x1 + ((y >> 3) << 7)]; // point to current spot in back buffer
-    mask = 1 << (y & 7); // current bit offset
+    p = &ucBackbuffer[(x1/2) + (y1 * iPitch)]; // point to current spot in back buffer
+    shift = (x1 & 1) ? 4:0; // current bit offset
     for(x=x1; x1 <= x2; x1++) {
-      *p++ |= mask; // set pixel and increment x pointer
+      *p &= (0xf0 >> shift);
+      *p |= (ucColor << shift);
+      shift = 4-shift;
+      if (shift == 0) // time to increment pointer
+         p++;
       error -= dy;
       if (error < 0)
       {
         error += dx;
         if (yinc > 0)
-           mask <<= 1;
+           p += iPitch;
         else
-           mask >>= 1;
-        if (mask == 0) // we've moved outside the current row, write the data we changed
-        {
-           ssd1327SetPosition(x, y>>3);
-           ssd1327WriteDataBlock(pStart,  (int)(p-pStart)); // write the row we changed
-           x = x1+1; // we've already written the byte at x1
-           y1 = y+yinc;
-           p += (yinc > 0) ? 128 : -128;
-           pStart = p;
-           mask = 1 << (y1 & 7);
-        }
+           p -= iPitch;
         y += yinc;
       }
     } // for x1    
-   if (p != pStart) // some data needs to be written
-   {
-     ssd1327SetPosition(x, y>>3);
-     ssd1327WriteDataBlock(pStart, (int)(p-pStart));
-   }
   }
   else {
     // Y major case
@@ -721,9 +822,8 @@ void oledDrawLine(int x1, int y1, int x2, int y2)
       y2 = temp;
     } 
 
-    p = &ucScreen[x1 + ((y1 >> 3) * 128)]; // point to current spot in back buffer
-    bOld = bNew = p[0]; // current data at that address
-    mask = 1 << (y1 & 7); // current bit offset
+    p = &ucBackbuffer[(x1/2) + (y1 * iPitch)]; // point to current spot in back buffer
+    shift = (x1 & 1) ? 4:0; // current bit offset
     dx = (x2 - x1);
     error = dy >> 1;
     xinc = 1;
@@ -733,41 +833,27 @@ void oledDrawLine(int x1, int y1, int x2, int y2)
       xinc = -1;
     }
     for(x = x1; y1 <= y2; y1++) {
-      bNew |= mask; // set the pixel
+      *p &= (0xf0 >> shift); // set the pixel
+      *p |= (ucColor << shift);
       error -= dx;
-      mask <<= 1; // y1++
-      if (mask == 0) // we're done with this byte, write it if necessary
-      {
-        if (bOld != bNew)
-        {
-          p[0] = bNew; // save to RAM
-          ssd1327SetPosition(x, y1>>3);
-          ssd1327WriteDataBlock(&bNew, 1);
-        }
-        p += 128; // next line
-        bOld = bNew = p[0];
-        mask = 1; // start at LSB again
-      }
+      p += iPitch; // y1++
       if (error < 0)
       {
         error += dy;
-        if (bOld != bNew) // write the last byte we modified if it changed
-        {
-          p[0] = bNew; // save to RAM
-          ssd1327SetPosition(x, y1>>3);
-          ssd1327WriteDataBlock(&bNew, 1);         
-        }
-        p += xinc;
         x += xinc;
-        bOld = bNew = p[0];
+        shift = 4-shift;
+        if (xinc == 1)
+        {
+          if (shift == 0) // time to increment pointer
+            p++;
+        }
+        else
+        {
+          if (shift == 4)
+            p--;
+        }
       }
     } // for y
-    if (bOld != bNew) // write the last byte we modified if it changed
-    {
-      p[0] = bNew; // save to RAM
-      ssd1327SetPosition(x, y2>>3);
-      ssd1327WriteDataBlock(&bNew, 1);        
-    }
   } // y major case
-} /* oledDrawLine() */
-#endif // FUTURE
+} /* ssd1327DrawLine() */
+#endif // USE_BACKBUFFER
