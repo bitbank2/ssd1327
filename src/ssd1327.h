@@ -9,6 +9,9 @@ OLED_128x128 = 0, // SSD1327
 OLED_256x64	  // SSD1322
 };
 
+#if defined(_LINUX_) && defined(__cplusplus)
+extern "C" {
+#endif
 //
 // Initializes the OLED controller into "page mode" on I2C
 // If SDAPin and SCLPin are not -1, then bit bang I2C on those pins
@@ -32,12 +35,12 @@ void ssd1327Shutdown();
 // Power up/down the display
 // useful for low power situations
 //
-void ssd1327Power(byte bOn);
+void ssd1327Power(unsigned char bOn);
 //
 // Draw a string of normal (8x8), small (6x8) or large (16x32) characters
 // At the given col+row with the given foreground (MSN) and background (LSN) colors
 //
-void ssd1327WriteString(uint8_t x, uint8_t y, char *szMsg, uint8_t iSize, uint8_t ucFGColor, uint8_t ucBGColor);
+void ssd1327WriteString(uint8_t x, uint8_t y, char *szMsg, uint8_t iSize, int ucFGColor, int ucBGColor);
 //
 // Fill the frame buffer with a color
 // e.g. black (0x00) or white (0xf)
@@ -68,4 +71,7 @@ void ssd1327DrawLine(int x1, int y1, int x2, int y2, uint8_t ucColor);
 
 #endif // __AVR__
 
+#if defined(_LINUX_) && defined(__cplusplus)
+}
+#endif
 #endif // __SSD1327__

@@ -17,6 +17,22 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
+#ifdef _LINUX_
+#include <stdint.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/i2c-dev.h>
+#include <math.h>
+#define PROGMEM
+#define memcpy_P memcpy
+static int file_i2c = 0;
+#define USE_BACKBUFFER
+#else // Arduino
+
 #include <Arduino.h>
 #ifdef __AVR__
 #include <avr/pgmspace.h>
@@ -29,16 +45,17 @@
 #include <Wire.h>
 #include <SPI.h>
 #endif
+#endif // _LINUX_
 #include <ssd1327.h>
 
 #ifdef USE_BACKBUFFER
 static uint8_t ucBackbuffer[8192];
 #endif
 
-void ssd1327Power(byte bOn);
+void ssd1327Power(unsigned char bOn);
 
 // small (8x8) font
-const byte ucFont[]PROGMEM = {
+const unsigned char ucFont[]PROGMEM = {
 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x06,0x5f,0x5f,0x06,0x00,0x00,
 0x00,0x07,0x07,0x00,0x07,0x07,0x00,0x00,0x14,0x7f,0x7f,0x14,0x7f,0x7f,0x14,0x00,
   0x24,0x2e,0x2a,0x6b,0x6b,0x3a,0x12,0x00,0x46,0x66,0x30,0x18,0x0c,0x66,0x62,0x00,
@@ -88,7 +105,7 @@ const byte ucFont[]PROGMEM = {
   0x00,0x00,0x00,0x77,0x77,0x00,0x00,0x00,0x41,0x41,0x77,0x3e,0x08,0x08,0x00,0x00,
   0x02,0x03,0x01,0x03,0x02,0x03,0x01,0x00,0x70,0x78,0x4c,0x46,0x4c,0x78,0x70,0x00};
   // 5x7 font (in 6x8 cell)
-const byte ucSmallFont[]PROGMEM = {
+const unsigned char ucSmallFont[]PROGMEM = {
 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x06,0x5f,0x06,0x00,0x00,0x07,0x03,0x00,
 0x07,0x03,0x00,0x24,0x7e,0x24,0x7e,0x24,0x00,0x24,0x2b,0x6a,0x12,0x00,0x00,0x63,
 0x13,0x08,0x64,0x63,0x00,0x36,0x49,0x56,0x20,0x50,0x00,0x00,0x07,0x03,0x00,0x00,
@@ -133,8 +150,46 @@ static int oled_type, oled_flip, oled_addr;
 static int iSDAPin, iSCLPin;
 static void ssd1327WriteCommand(unsigned char c);
 
+// wrapper/adapter functions to make the code work on Linux
+#ifdef _LINUX_
+static uint8_t pgm_read_byte(uint8_t *ptr)
+{
+  return *ptr;
+}
+static int16_t pgm_read_word(uint8_t *ptr)
+{
+  return ptr[0] + (ptr[1]<<8);
+}
+int I2CReadRegister(uint8_t addr, uint8_t reg, uint8_t *pBuf, int iLen)
+{
+int rc;
+  rc = write(file_i2c, &reg, 1);
+  rc = read(file_i2c, pBuf, iLen);
+  return (rc > 0);
+}
+int I2CInit(int iSDAPin, int iSCLPin, int32_t iSpeed)
+{
+char filename[32];
+
+  sprintf(filename, "/dev/i2c-%d", iSDAPin); // I2C bus number passed in SDA pin
+  if ((file_i2c = open(filename, O_RDWR)) < 0)
+     return 1;
+  if (ioctl(file_i2c, I2C_SLAVE, iSCLPin) < 0) // set slave address
+  {
+     close(file_i2c);
+     file_i2c = 0;
+     return 1;
+  }
+  return 0;
+}
+static void I2CWrite(unsigned char ucAddr, unsigned char *pData, int iLen)
+{
+  write(file_i2c, pData, iLen);
+}
+#endif // _LINUX_
+
 // use only the bitbang version on ATtiny85 to avoid linking wire library
-#ifdef __AVR_ATtiny85__
+#if defined( __AVR_ATtiny85__ ) || defined(_LINUX_)
 static void oledWrite(unsigned char *pData, int iLen)
 {
   I2CWrite(oled_addr, pData, iLen);
@@ -226,7 +281,7 @@ uint8_t ucTemp[8], iCount;
 	
 } /* ssd1322Init() */
 
-#ifndef __AVR_ATtiny85__
+#if !defined( __AVR_ATtiny85__ ) && !defined(_LINUX_)
 //
 // Initialize the OLED controller for SPI mode
 //
@@ -312,6 +367,9 @@ unsigned char uc[4];
 // Disable SPI mode code
   iCSPin = iDCPin = iResetPin = -1;
 
+#ifdef _LINUX_
+  I2CInit(sda, iAddr, iSpeed); // bus number and address for Linux
+#else
 if (sda != -1 && scl != -1)
 {
   I2CInit(sda, scl, iSpeed);
@@ -323,6 +381,8 @@ else
   Wire.setClock(iSpeed); // use high speed I2C mode (default is 100Khz)
 }
 #endif
+#endif // _LINUX_
+
   ssd1327Power(0); // turn off the power
   uc[0] = 0x00; // command
   uc[1] = 0xa0; // GDDRAM mapping
@@ -339,7 +399,7 @@ else
 //
 // Sends a command to turn on or off the OLED display
 //
-void ssd1327Power(byte bOn)
+void ssd1327Power(unsigned char bOn)
 {
     if (bOn)
       ssd1327WriteCommand(0xaf); // turn on OLED
@@ -427,15 +487,15 @@ unsigned char ucTemp[129];
 // Pass the pointer to the beginning of the BMP file
 // First pass version assumes a full screen bitmap
 //
-int oledLoadBMP(byte *pBMP)
+int oledLoadBMP(unsigned char *pBMP)
 {
 int16_t i16;
 int iOffBits, q, y, j; // offset to bitmap data
 int iPitch;
-byte x, z, b, *s;
-byte dst_mask;
-byte ucTemp[16]; // process 16 bytes at a time
-byte bFlipped = false;
+unsigned char x, z, b, *s;
+unsigned char dst_mask;
+unsigned char ucTemp[16]; // process 16 bytes at a time
+unsigned char bFlipped = false;
 
   i16 = pgm_read_word(pBMP);
   if (i16 != 0x4d42) // must start with 'BM'
