@@ -6,7 +6,7 @@ all: sample
 sample: sample.o
 	$(CC) sample.o $(LIBS) -o sample
 
-sample.o: sample.c
+sample.o: sample.c ../src/ssd1327.cpp ../src/ssd1327.h
 	$(CC) $(CFLAGS) sample.c
 
 clean:

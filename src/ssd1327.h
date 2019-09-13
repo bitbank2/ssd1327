@@ -13,6 +13,10 @@ OLED_256x64	  // SSD1322
 extern "C" {
 #endif
 //
+// Draw an outline or filled Ellipse
+//
+void ssd1327Ellipse(int32_t iCenterX, int32_t iCenterY, int32_t iRadiusX, int32_t iRadiusY, uint8_t ucColor, int bFilled);
+//
 // Initializes the OLED controller into "page mode" on I2C
 // If SDAPin and SCLPin are not -1, then bit bang I2C on those pins
 // Otherwise use the Wire library
@@ -30,7 +34,7 @@ void ssd1327SetContrast(unsigned char ucContrast);
 //
 // Sends a command to turn off the OLED display
 //
-void ssd1327Shutdown();
+void ssd1327Shutdown(void);
 //
 // Power up/down the display
 // useful for low power situations

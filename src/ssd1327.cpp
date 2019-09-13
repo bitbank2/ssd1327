@@ -231,15 +231,15 @@ static void oledWrite(unsigned char *pData, int iLen)
 //
 // Turn off the display
 //
-void oledShutdown(void)
+void ssd1327Shutdown(void)
 {
-uint8_t uc[2];
+	ssd1327Power(0); // power off the display
+#ifdef  _LINUX_
+	close(file_i2c);
+	file_i2c = 0;	
+#endif
 
-    uc[0] = 0; // command
-    uc[1] = 0xae; // display off
-    oledWrite(uc, 2);
-
-} /* oledShutdown() */
+} /* ssd1327Shutdown() */
 //
 // ssd1322
 //
@@ -382,6 +382,20 @@ else
 }
 #endif
 #endif // _LINUX_
+
+  if (oled_type == OLED_256x64)
+  {
+    iMaxX = 256;
+    iMaxY = 64;
+    iPitch = 128;
+    ssd1322Init();
+  }
+  else
+  {
+    iPitch = 64;
+    iMaxX = 128;
+    iMaxY = 128;
+  }
 
   ssd1327Power(0); // turn off the power
   uc[0] = 0x00; // command
@@ -682,8 +696,7 @@ uint8_t first_shift, second_shift;
 #endif
               }
 #ifdef USE_BACKBUFFER
-              d -= 8;
-              d += iPitch; // move to next line
+              d += iPitch*2; // move to next line
 #else
               oledWrite(ucTemp, 17); // write 2 rows of the character
 #endif
@@ -695,6 +708,128 @@ uint8_t first_shift, second_shift;
     }
 } /* ssd1327WriteString() */
 #ifdef USE_BACKBUFFER
+//
+// For drawing ellipses, a circle is drawn and the x and y pixels are scaled by a 16-bit integer fraction
+// This function draws a single pixel and scales its position based on the x/y fraction of the ellipse
+//
+void DrawScaledPixel(int32_t iCX, int32_t iCY, int32_t x, int32_t y, int32_t iXFrac, int32_t iYFrac, uint8_t ucColor)
+{   
+uint8_t *d;
+
+    if (iXFrac != 0x10000) x = (x * iXFrac) >> 16;
+    if (iYFrac != 0x10000) y = (y * iYFrac) >> 16;
+    x += iCX; y += iCY;
+    if (x < 0 || x >= iMaxX || y < 0 || y >= iMaxY)
+        return; // off the screen
+    d = &ucBackbuffer[(y * iPitch) + x/2];
+    if (x & 1)
+    {
+      d[0] &= 0xf;
+      d[0] |= (ucColor << 4);
+    }
+    else
+    {
+      d[0] &= 0xf0;
+      d[0] |= ucColor;
+    }
+} /* DrawScaledPixel() */
+void DrawScaledLine(int32_t iCX, int32_t iCY, int32_t x, int32_t y, int32_t iXFrac, int32_t iYFrac, uint8_t ucColor)
+{   
+int32_t iLen, x2;
+uint8_t *d;
+
+    if (iXFrac != 0x10000) x = (x * iXFrac) >> 16;
+    if (iYFrac != 0x10000) y = (y * iYFrac) >> 16;
+    iLen = x * 2;
+    x = iCX - x; y += iCY;
+    x2 = x + iLen; 
+    if (y < 0 || y >= iMaxY) 
+        return; // completely off the screen
+    if (x < 0) x = 0;
+    if (x2 >= iMaxX) x2 = iMaxX-1;
+    iLen = x2 - x + 1; // new length
+    d = &ucBackbuffer[(y * iPitch) + x/2];
+    uint8_t c = ucColor | (ucColor << 4);
+    if (x & 1) // starting on odd pixel
+    {
+      d[0] &= 0xf;
+      d[0] |= (ucColor << 4);
+      d++;
+      iLen--;
+    }
+    while (iLen >= 2) // middle part
+    {
+      *d++ = c;
+      iLen -= 2;
+    }
+    if (iLen) // last odd pixel
+    {
+      d[0] &= 0xf0;
+      d[0] |= ucColor;
+    }
+} /* DrawScaledLine() */
+//
+// Draw the 8 pixels around the Bresenham circle
+// (scaled to make an ellipse)
+//
+void BresenhamCircle(int32_t iCX, int32_t iCY, int32_t x, int32_t y, int32_t iXFrac, int32_t iYFrac, uint8_t iColor, int bFill)
+{
+    if (bFill) // draw a filled ellipse
+    {
+        // for a filled ellipse, draw 4 lines instead of 8 pixels
+        DrawScaledLine(iCX, iCY, x, y, iXFrac, iYFrac, iColor);
+        DrawScaledLine(iCX, iCY, x, -y, iXFrac, iYFrac, iColor);
+        DrawScaledLine(iCX, iCY, y, x, iXFrac, iYFrac, iColor);
+        DrawScaledLine(iCX, iCY, y, -x, iXFrac, iYFrac, iColor);
+    }
+    else // draw 8 pixels around the edges
+    {
+        DrawScaledPixel(iCX, iCY, x, y, iXFrac, iYFrac, iColor);
+        DrawScaledPixel(iCX, iCY, -x, y, iXFrac, iYFrac, iColor);
+        DrawScaledPixel(iCX, iCY, x, -y, iXFrac, iYFrac, iColor);
+        DrawScaledPixel(iCX, iCY, -x, -y, iXFrac, iYFrac, iColor);
+        DrawScaledPixel(iCX, iCY, y, x, iXFrac, iYFrac, iColor);
+        DrawScaledPixel(iCX, iCY, -y, x, iXFrac, iYFrac, iColor);
+        DrawScaledPixel(iCX, iCY, y, -x, iXFrac, iYFrac, iColor);
+        DrawScaledPixel(iCX, iCY, -y, -x, iXFrac, iYFrac, iColor);
+    }
+} /* BresenhamCircle() */
+void ssd1327Ellipse(int32_t iCenterX, int32_t iCenterY, int32_t iRadiusX, int32_t iRadiusY, uint8_t ucColor, int bFilled)
+{
+    int32_t iRadius, iXFrac, iYFrac;
+    int32_t iDelta, x, y;
+
+    if (iRadiusX > iRadiusY) // use X as the primary radius
+    {   
+        iRadius = iRadiusX;
+        iXFrac = 65536;
+        iYFrac = (iRadiusY * 65536) / iRadiusX;
+    }
+    else
+    {
+        iRadius = iRadiusY;
+        iXFrac = (iRadiusX * 65536) / iRadiusY;
+        iYFrac = 65536;
+    }
+    // set up a buffer with the widest possible run of pixels to dump in 1 shot
+    iDelta = 3 - (2 * iRadius);
+    x = 0; y = iRadius;
+    while (x <= y)
+    {
+        BresenhamCircle(iCenterX, iCenterY, x, y, iXFrac, iYFrac, ucColor, bFilled);
+        x++;
+        if (iDelta < 0)
+        {
+            iDelta += (4*x) + 6;
+        }
+        else
+        {
+            iDelta += 4 * (x-y) + 10;
+            y--;
+        }
+    }
+} /* ssd1327Ellipse() */
+
 //
 // Display part of whole of the backbuffer to the visible display
 //
