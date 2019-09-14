@@ -578,6 +578,8 @@ unsigned char uc, ucMask;
 unsigned char c, *s, *d, ucTemp2[8];
 #ifndef USE_BACKBUFFER
 unsigned char ucTemp[40];
+#else
+int iBG;
 #endif
 
 #ifdef __AVR__
@@ -661,7 +663,7 @@ unsigned char ucTemp[40];
           unsigned char ucMask;
           s = (unsigned char *)&ucFont[(int)c*8];
           memcpy_P(ucTemp2, s, 8);
-          ssd1327SetPosition(x, y, 16, 16);
+          iBG = ucBG;
           ucFG |= (ucFG << 4); // 2 pixels at a time
           ucBG |= (ucBG << 4);
           // Stretch the font to double width + double height
@@ -669,20 +671,23 @@ unsigned char ucTemp[40];
 #ifdef USE_BACKBUFFER
           d = &ucBackbuffer[(y*iPitch)+(x/2)];
 #else
+          ssd1327SetPosition(x, y, 16, 16);
           ucTemp[0] = 0x40; // start of data (write one row at a time)
 #endif
           for (ty=0; ty<8; ty++)
           {
               for (tx=0; tx<8; tx++)
               {
+#ifdef USE_BACKBUFFER
+                  if (ucTemp2[tx] & ucMask) // pixel set
+                     d[tx] = d[tx+iPitch] = ucFG;
+                  else if (ucBG != -1)
+                     d[tx] = d[tx+iPitch] = ucBG;
+#else
                   if (ucTemp2[tx] & ucMask) // pixel set
                      c = ucFG;
                   else
                      c = ucBG;
-#ifdef USE_BACKBUFFER
-                  if (ucBG != -1 || c == ucFG) // implements transparent text
-                    d[tx] = d[tx+iPitch] = c;
-#else
                   ucTemp[1+tx] = ucTemp[1+tx+8] = c; // double it vertically
 #endif
               }
@@ -977,12 +982,12 @@ void ssd1327DrawLine(int x1, int y1, int x2, int y2, uint8_t ucColor)
       yinc = -1;
     }
     p = &ucBackbuffer[(x1/2) + (y1 * iPitch)]; // point to current spot in back buffer
-    shift = (x1 & 1) ? 4:0; // current bit offset
+    shift = (x1 & 1) ? 0:4; // current bit offset
     for(x=x1; x1 <= x2; x1++) {
       *p &= (0xf0 >> shift);
       *p |= (ucColor << shift);
       shift = 4-shift;
-      if (shift == 0) // time to increment pointer
+      if (shift == 4) // time to increment pointer
          p++;
       error -= dy;
       if (error < 0)
@@ -1009,7 +1014,7 @@ void ssd1327DrawLine(int x1, int y1, int x2, int y2, uint8_t ucColor)
     } 
 
     p = &ucBackbuffer[(x1/2) + (y1 * iPitch)]; // point to current spot in back buffer
-    shift = (x1 & 1) ? 4:0; // current bit offset
+    shift = (x1 & 1) ? 0:4; // current bit offset
     dx = (x2 - x1);
     error = dy >> 1;
     xinc = 1;
@@ -1030,12 +1035,12 @@ void ssd1327DrawLine(int x1, int y1, int x2, int y2, uint8_t ucColor)
         shift = 4-shift;
         if (xinc == 1)
         {
-          if (shift == 0) // time to increment pointer
+          if (shift == 4) // time to increment pointer
             p++;
         }
         else
         {
-          if (shift == 4)
+          if (shift == 0)
             p--;
         }
       }
