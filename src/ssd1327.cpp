@@ -243,7 +243,7 @@ void ssd1327Shutdown(void)
 //
 // ssd1322
 //
-static const uint8_t ssd1322_init_table[] = {
+static uint8_t ssd1322_init_table[] = {
 	2, 0xfd, 0x12, // unlock the controller
         1, 0xa4, // set display off
 //        1, 0xb9, // default grayscale mode
@@ -260,12 +260,16 @@ static const uint8_t ssd1322_init_table[] = {
 	1, 0xa6, // set normal display mode
 	0
 };
-void ssd1322Init(void)
+void ssd1322Init(int bFlip)
 {
 uint8_t *s = (uint8_t *)ssd1322_init_table;
 uint8_t ucTemp[8], iCount;
 
    iCount = 1;
+   if (bFlip)
+     ssd1322_init_table[19] = 0x06;
+   else
+     ssd1322_init_table[19] = 0x14; // segment remap
    ucTemp[0] = 0x40; // pretend it's I2C data
    while (iCount)
    {
@@ -322,7 +326,7 @@ uint8_t uc[32];
     iMaxX = 256;
     iMaxY = 64;
     iPitch = 128;
-    ssd1322Init();
+    ssd1322Init(bFlip);
   }
   else
   {
@@ -339,7 +343,7 @@ uint8_t uc[32];
     uc[1] = 0xa7; // invert command
     oledWrite(uc, 2);
   }
-  if (bFlip) // rotate display 180
+  if (bFlip && oled_type == OLED_128x128) // rotate display 180
   {
     uc[0] = 0; // command
     uc[1] = 0xa0;
@@ -388,7 +392,7 @@ else
     iMaxX = 256;
     iMaxY = 64;
     iPitch = 128;
-    ssd1322Init();
+    ssd1322Init(bFlip);
   }
   else
   {
@@ -398,13 +402,16 @@ else
   }
 
   ssd1327Power(0); // turn off the power
-  uc[0] = 0x00; // command
-  uc[1] = 0xa0; // GDDRAM mapping
-  if (bFlip)
-     uc[2] = 0x42;
-  else
-     uc[2] = 0x51; // default (top to bottom, left to right mapping)
-  oledWrite(uc, 3);
+  if (oled_type == OLED_128x128)
+  {
+    uc[0] = 0x00; // command
+    uc[1] = 0xa0; // GDDRAM mapping
+    if (bFlip)
+       uc[2] = 0x42;
+    else
+       uc[2] = 0x51; // default (top to bottom, left to right mapping)
+    oledWrite(uc, 3);
+  }
   ssd1327Power(1); // turn on the power
   uc[0] = 0; // command
   uc[1] = (bInvert) ? 0xa7:0xa4; // invert command / normal display
