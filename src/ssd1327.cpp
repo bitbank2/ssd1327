@@ -401,9 +401,9 @@ else
   uc[0] = 0x00; // command
   uc[1] = 0xa0; // GDDRAM mapping
   if (bFlip)
-     uc[2] = 0x40;
+     uc[2] = 0x42;
   else
-     uc[2] = 0x53; // default (top to bottom, left to right mapping)
+     uc[2] = 0x51; // default (top to bottom, left to right mapping)
   oledWrite(uc, 3);
   ssd1327Power(1); // turn on the power
   uc[0] = 0; // command
@@ -579,16 +579,7 @@ unsigned char c, *s, *d, ucTemp2[8];
 #ifndef USE_BACKBUFFER
 unsigned char ucTemp[40];
 #endif
-uint8_t first_shift, second_shift;
 
-  if (oled_type == OLED_256x64)
-  {
-    first_shift = 4; second_shift = 0;
-  }
-  else // reversed nibble order
-  {
-    first_shift = 0; second_shift = 4;
-  }
 #ifdef __AVR__
   if (ucBG == -1) ucBG = 0; // no transparent text allowed
 #endif
@@ -620,13 +611,13 @@ uint8_t first_shift, second_shift;
            {
               if (s[tx] & ucMask) // foreground
               {
-                d[0] &= (0xf0 >> first_shift);
-                d[0] |= (ucFG << first_shift);
+                d[0] &= 0xf;
+                d[0] |= (ucFG << 4);
               }
               if (s[tx+1] & ucMask)
               {
-                d[0] &= (0xf0 >> second_shift);
-                d[0] |= (ucFG << second_shift);
+                d[0] &= 0xf0;
+                d[0] |= ucFG;
               }
               d++;
            } // for tx
@@ -636,13 +627,13 @@ uint8_t first_shift, second_shift;
            for (tx=0; tx<cx; tx+=2)
            {
               if (s[tx] & ucMask)
-                 uc = ucFG << first_shift;
+                 uc = ucFG << 4;
               else
-                 uc = ucBG << first_shift;
+                 uc = ucBG << 4;
               if (s[tx+1] & ucMask)
-                 uc |= (ucFG << second_shift);
+                 uc |= ucFG;
               else
-                 uc |= (ucBG << second_shift);
+                 uc |= ucBG;
               *d++ = uc; // store pixel pair
            } // for tx
            }
@@ -724,13 +715,13 @@ uint8_t *d;
     d = &ucBackbuffer[(y * iPitch) + x/2];
     if (x & 1)
     {
-      d[0] &= 0xf;
-      d[0] |= (ucColor << 4);
+      d[0] &= 0xf0;
+      d[0] |= ucColor;
     }
     else
     {
-      d[0] &= 0xf0;
-      d[0] |= ucColor;
+      d[0] &= 0xf;
+      d[0] |= (ucColor << 4);
     }
 } /* DrawScaledPixel() */
 void DrawScaledLine(int32_t iCX, int32_t iCY, int32_t x, int32_t y, int32_t iXFrac, int32_t iYFrac, uint8_t ucColor)
@@ -752,8 +743,8 @@ uint8_t *d;
     uint8_t c = ucColor | (ucColor << 4);
     if (x & 1) // starting on odd pixel
     {
-      d[0] &= 0xf;
-      d[0] |= (ucColor << 4);
+      d[0] &= 0xf0;
+      d[0] |= ucColor;
       d++;
       iLen--;
     }
@@ -764,8 +755,8 @@ uint8_t *d;
     }
     if (iLen) // last odd pixel
     {
-      d[0] &= 0xf0;
-      d[0] |= ucColor;
+      d[0] &= 0xf;
+      d[0] |= (ucColor << 4);
     }
 } /* DrawScaledLine() */
 //
@@ -859,13 +850,13 @@ uint8_t c, *d;
   c = d[0];
   if (x & 1)
   {
-    c &= 0xf; // right pixel
-    c |= (ucColor << 4); 
+    c &= 0xf0; // right pixel
+    c |= ucColor; 
   }
   else
   {
-    c &= 0xf0;
-    c |= ucColor;
+    c &= 0xf;
+    c |= (ucColor << 4);
   }
   d[0] = c;
 } /* ssd1327SetPixel() */
