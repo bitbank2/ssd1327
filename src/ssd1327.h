@@ -61,9 +61,10 @@ void ssd1327Fill(unsigned char ucColor);
 //
 void ssd1327SetPixel(int x, int y, unsigned char ucColor);
 //
-// Copy part or whole of the backbuffer to the physical display
+// Copy part or whole of the backbuffer or custom bitmap to the physical display
+// Pass a NULL pointer to use the backbuffer
 //
-void ssd1327ShowBuffer(int x, int y, int w, int h);
+void ssd1327ShowBitmap(uint8_t *pBuffer, int iLocalPitch, int x, int y, int w, int h);
 //
 // Return a pointer to the back buffer for direct manipulation
 //
@@ -72,6 +73,17 @@ uint8_t * ssd1327GetBackbuffer(void);
 // Draw a Bresenham line from point 1 to point 2
 //
 void ssd1327DrawLine(int x1, int y1, int x2, int y2, uint8_t ucColor);
+//
+// Rotate a 1-bpp or 4-bpp image around a given center point
+// valid angles are 0-359
+//
+void ssd1327RotateBitmap(uint8_t *pSrc, uint8_t *pDest, int iBpp, int iWidth, int iHeight, int iPitch, int iCenterX, int iCenterY, int iAngle);
+//
+// Draw 1-bpp image pattern with transparency
+//
+void ssd1327DrawPattern(uint8_t *pPattern, int iSrcPitch, int iDestX, int iDestY, int iCX, int iCY, uint8_t ucColor);
+
+void ssd1327Rectangle(int x, int y, int w, int h, uint8_t ucColor, int bFill);
 
 #endif // __AVR__
 

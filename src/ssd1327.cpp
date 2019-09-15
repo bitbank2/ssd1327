@@ -597,6 +597,7 @@ int iBG;
        uint8_t cx = (iSize == FONT_NORMAL) ? 8:6;
        uint8_t *pFont = (iSize == FONT_NORMAL) ? (uint8_t*)ucFont:(uint8_t*)ucSmallFont;
        i = 0;
+       if (y > iMaxY-7) return; // will write past the bottom
        while (x < iMaxX-7 && szMsg[i] != 0)
        {
          ssd1327SetPosition(x, y, cx, 8);
@@ -661,6 +662,7 @@ int iBG;
     }
     else if (iSize == FONT_LARGE) // 16x16 font
     {
+      if (y > iMaxY-15) return; // will write past the bottom
       i = 0;
       while (x < iMaxX-15 && szMsg[i] != 0)
       {
@@ -832,26 +834,80 @@ void ssd1327Ellipse(int32_t iCenterX, int32_t iCenterY, int32_t iRadiusX, int32_
         }
     }
 } /* ssd1327Ellipse() */
+//
+// Draw a 1-bpp pattern into the backbuffer with the given color
+// 1 bits are drawn as color, 0 are transparent
+//
+void ssd1327DrawPattern(uint8_t *pPattern, int iSrcPitch, int iDestX, int iDestY, int iCX, int iCY, uint8_t ucColor)
+{
+    int x, y;
+    uint8_t *s, uc, ucPixel, ucMask;
+    uint8_t *d;
+   
+    if (iDestX + iCX > iMaxX || iDestY + iCY > iMaxY || iDestX < 0 || iDestY < 0 || iCX < 0 || iCY < 0)
+        return; // invalid parameter
+   
+    if (iDestX+iCX > iMaxX) // trim to fit on display
+        iCX = (iMaxX - iDestX);
+    if (iDestY+iCY > iMaxY)
+        iCY = (iMaxY - iDestY);
+    if (pPattern == NULL || iDestX < 0 || iDestY < 0 || iCX <=0 || iCY <= 0)
+        return;
+    for (y=0; y<iCY; y++)
+    {
+        d = &ucBackbuffer[((iDestY+y)*iPitch) + (iDestX/2)];
+        s = &pPattern[y * iSrcPitch];
+        ucMask = uc = 0;
+        for (x=0; x<iCX; x+=2)
+        {
+            ucMask >>= 1;
+            ucPixel = d[0];
+            if (ucMask == 0)
+            {
+                ucMask = 0x80;
+                uc = *s++;
+            }
+            if (uc & ucMask) // active pixel
+            {
+                ucPixel &= 0xf;
+                ucPixel |= (ucColor << 4); 
+            }
+            ucMask >>= 1;
+            if (uc & ucMask) // odd pixel
+            {
+                ucPixel &= 0xf0;
+                ucPixel |= ucColor;
+            }
+            *d++ = ucPixel; // write modified pixel pair
+        } // for x
+    } // for y
+
+} /* ssd1327DrawPattern() */
 
 //
-// Display part of whole of the backbuffer to the visible display
+// Display part or whole of the backbuffer or a custom bitmap to the visible display
+// Pass a NULL pointer to display the backbuffer
 //
-void ssd1327ShowBuffer(int x, int y, int w, int h)
+void ssd1327ShowBitmap(uint8_t *pBuffer, int iLocalPitch, int x, int y, int w, int h)
 {
 int ty;
 uint8_t *s;
 
   if (x < 0 || y < 0 || x >= iMaxX || y >= iMaxY || (x+w) > iMaxX || (y+h) > iMaxY)
     return; // invalid coordinates
-
+  if (pBuffer == NULL)
+  {
+    pBuffer = &ucBackbuffer[(y*iPitch)+(x/2)]; // starting point also
+    iLocalPitch = iPitch;
+  }
   ssd1327SetPosition(x, y, w, h);
   for (ty=0; ty<h; ty++)
   {
-    s = &ucBackbuffer[iPitch * (y+ty)];
+    s = &pBuffer[iLocalPitch * (y+ty)];
     ssd1327WriteDataBlock(&s[x/2], w/2);
   } // for y
 
-} /* ssd1327ShowBuffer() */
+} /* ssd1327ShowBitmap() */
 // Set an individual pixel to a specific color
 // Only affects the backbuffer and must be explicitly
 // displayed later with ssd1327ShowBuffer()
@@ -940,10 +996,10 @@ uint8_t *d;
     d = &ucBackbuffer[(y*iPitch)+(x/2)];
     for (i=0; i<h; i++)
     {
-      d[0] &= 0xf0; // set left pixel
-      d[0] |= ucColor;
-      d[w/2-1] &= 0xf; // set right pixel
-      d[w/2-1] |= (ucColor << 4);
+      d[0] &= 0xf; // set left pixel
+      d[0] |= (ucColor << 4);
+      d[w/2-1] &= 0xf0; // set right pixel
+      d[w/2-1] |= ucColor;
       d += iPitch;
     }
   } // outline
@@ -953,6 +1009,144 @@ uint8_t *ssd1327GetBackbuffer(void)
 {
   return ucBackbuffer;
 }
+//
+// Table of sine values for 0-360 degrees expressed as a signed 16-bit value
+// from -32768 (-1) to 32767 (1)
+//
+int16_t i16SineTable[] = {0,572, 1144, 1715, 2286, 2856, 3425, 3993, 4560, 5126,  // 0-9
+        5690,  6252, 6813, 7371, 7927, 8481, 9032, 9580, 10126, 10668, // 10-19
+        11207,  11743, 12275, 12803, 13328, 13848, 14365, 14876, 15384, 15886,// 20-29
+        16384,  16877, 17364, 17847, 18324, 18795, 19261, 19720, 20174, 20622,// 30-39
+        21063,  21498, 21926, 22348, 22763, 23170, 23571, 23965, 24351, 24730,// 40-49
+        25102,  25466, 25822, 26170, 26510, 26842, 27166, 27482, 27789, 28088,// 50-59
+        28378,  28660, 28932, 29197, 29452, 29698, 29935, 30163, 30382, 30592,// 60-69
+        30792,  30983, 31164, 31336, 31499, 31651, 31795, 31928, 32052, 32166,// 70-79
+        32270,  32365, 32440, 32524, 32599, 32643, 32688, 32723, 32748, 32763,// 80-89
+        32767,  32763, 32748, 32723, 32688, 32643, 32588, 32524, 32449, 32365,// 90-99
+        32270,  32166, 32052, 31928, 31795, 31651, 31499, 31336, 31164, 30983,// 100-109
+        30792,  30592, 30382, 30163, 29935, 29698, 29452, 29197, 28932, 28660,// 110-119
+        28378,  28088, 27789, 27482, 27166, 26842, 26510, 26170, 25822, 25466,// 120-129
+        25102,  24730, 24351, 23965, 23571, 23170, 22763, 22348, 21926, 21498,// 130-139
+        21063,  20622, 20174, 19720, 19261, 18795, 18324, 17847, 17364, 16877,// 140-149
+        16384,  15886, 15384, 14876, 14365, 13848, 13328, 12803, 12275, 11743,// 150-159
+        11207,  10668, 10126, 9580, 9032, 8481, 7927, 7371, 6813, 6252,// 160-169
+        5690,  5126, 4560, 3993, 3425, 2856, 2286, 1715, 1144, 572,//  170-179
+        0,  -572, -1144, -1715, -2286, -2856, -3425, -3993, -4560, -5126,// 180-189
+        -5690,  -6252, -6813, -7371, -7927, -8481, -9032, -9580, -10126, -10668,// 190-199
+        -11207,  -11743, -12275, -12803, -13328, -13848, -14365, -14876, -15384, -15886,// 200-209
+        -16384,  -16877, -17364, -17847, -18324, -18795, -19261, -19720, -20174, -20622,// 210-219
+        -21063,  -21498, -21926, -22348, -22763, -23170, -23571, -23965, -24351, -24730, // 220-229
+        -25102,  -25466, -25822, -26170, -26510, -26842, -27166, -27482, -27789, -28088, // 230-239
+        -28378,  -28660, -28932, -29196, -29452, -29698, -29935, -30163, -30382, -30592, // 240-249
+        -30792,  -30983, -31164, -31336, -31499, -31651, -31795, -31928, -32052, -32166, // 250-259
+        -32270,  -32365, -32449, -32524, -32588, -32643, -32688, -32723, -32748, -32763, // 260-269
+        -32768,  -32763, -32748, -32723, -32688, -32643, -32588, -32524, -32449, -32365, // 270-279
+        -32270,  -32166, -32052, -31928, -31795, -31651, -31499, -31336, -31164, -30983, // 280-289
+        -30792,  -30592, -30382, -30163, -29935, -29698, -29452, -29196, -28932, -28660, // 290-299
+        -28378,  -28088, -27789, -27482, -27166, -26842, -26510, -26170, -25822, -25466, // 300-309
+        -25102,  -24730, -24351, -23965, -23571, -23170, -22763, -22348, -21926, -21498, // 310-319
+        -21063,  -20622, -20174, -19720, -19261, -18795, -18234, -17847, -17364, -16877, // 320-329
+        -16384,  -15886, -15384, -14876, -14365, -13848, -13328, -12803, -12275, -11743, // 330-339
+        -11207,  -10668, -10126, -9580, -9032, -8481, -7927, -7371, -6813, -6252,// 340-349
+        -5690,  -5126, -4560, -3993, -3425, -2856, -2286, -1715, -1144, -572, // 350-359
+// an extra 90 degrees to simulate the cosine function
+        0,572,  1144, 1715, 2286, 2856, 3425, 3993, 4560, 5126,// 0-9
+        5690,  6252, 6813, 7371, 7927, 8481, 9032, 9580, 10126, 10668,// 10-19
+        11207,  11743, 12275, 12803, 13328, 13848, 14365, 14876, 15384, 15886,// 20-29
+        16384,  16877, 17364, 17847, 18324, 18795, 19261, 19720, 20174, 20622,// 30-39
+        21063,  21498, 21926, 22348, 22763, 23170, 23571, 23965, 24351, 24730,// 40-49
+        25102,  25466, 25822, 26170, 26510, 26842, 27166, 27482, 27789, 28088,// 50-59
+        28378,  28660, 28932, 29197, 29452, 29698, 29935, 30163, 30382, 30592,// 60-69
+        30792,  30983, 31164, 31336, 31499, 31651, 31795, 31928, 32052, 32166,// 70-79
+    32270,  32365, 32440, 32524, 32599, 32643, 32688, 32723, 32748, 32763}; // 80-89
+
+
+//
+// Rotate a 1-bpp or 4-bpp image around a given center point
+// valid angles are 0-359
+//
+void ssd1327RotateBitmap(uint8_t *pSrc, uint8_t *pDest, int iBpp, int iWidth, int iHeight, int iPitch, int iCenterX, int iCenterY, int iAngle)
+{
+int32_t i, j, x, y;
+int16_t pre_sin[512], pre_cos[512], *pSin, *pCos;
+int32_t tx, ty, sa, ca;
+uint8_t *s, *d, uc, ucMask;
+
+    if (pSrc == NULL || pDest == NULL || iWidth < 2 || iHeight < 1 || iPitch < 1 || iAngle < 0 || iAngle > 359 || iCenterX < 0 || iCenterX >= iWidth || iCenterY < 0 || iCenterY >= iHeight || (iBpp != 1 && iBpp != 4))
+        return;
+    // since we're rotating from dest back to source, reverse the angle
+    iAngle = 360 - iAngle;
+    if (iAngle == 360) // just copy src to dest
+    {
+        memcpy(pDest, pSrc, iHeight * iPitch);
+        return;
+    }
+    // Create a quicker lookup table for sin/cos pre-multiplied at the given angle
+    sa = (int32_t)i16SineTable[iAngle]; // sine of given angle
+    ca = (int32_t)i16SineTable[iAngle+90]; // cosine of given angle
+    for (i=-256; i<256; i++) // create the pre-calc tables
+    {
+        pre_sin[i+256] = (sa * i) >> 15; // sin * x
+        pre_cos[i+256] = (ca * i) >> 15;
+    }
+    pSin = &pre_sin[256]; pCos = &pre_cos[256]; // point to 0 points in tables
+    for (y=0; y<iHeight; y++)
+    {
+        int16_t siny = pSin[y-iCenterY];
+        int16_t cosy = pCos[y-iCenterY];
+        int iShift;
+        uint8_t ucPixel;
+        d = &pDest[y * iPitch];
+        ucMask = 0x80; // for 1-bpp
+        iShift = 0; // for 4-bpp
+        uc = ucPixel = 0;
+        for (x=0; x<iWidth; x++)
+        {
+            // Rotate from the destination pixel back to the source to not have gaps
+            // x' = cos*x - sin*y, y' = sin*x + cos*y
+            tx = iCenterX + pCos[x-iCenterX] - siny;
+            ty = iCenterY + pSin[x-iCenterX] + cosy;
+            if (iBpp == 1)
+            {
+                if (tx > 0 && ty > 0 && tx < iWidth && ty < iHeight) // check source pixel
+                {
+                    s = &pSrc[(ty*iPitch)+(tx>>3)];
+                    if (s[0] & (0x80 >> (tx & 7)))
+                        uc |= ucMask; // set destination pixel
+                }
+                ucMask >>= 1;
+                if (ucMask == 0) // write the byte into the destination bitmap
+                {
+                    ucMask = 0x80;
+                    *d++ = uc;
+                    uc = 0;
+                }
+            }
+            else // 4-bpp
+            {
+                if (tx > 0 && ty > 0 && tx < iWidth && ty < iHeight) // check source pixel
+                {
+                    uc = pSrc[(ty*iPitch)+(tx/2)];
+                    if (tx & 1)
+                      uc >>= 4;
+                    else
+                      uc &= 0xf; // isolate the pixel in the lower 4 bits
+                    ucPixel |= (uc << iShift);
+                    iShift = 4-iShift;
+                    if (iShift == 0) // time to store the pair
+                    {
+                      *d++ = ucPixel;
+                      ucPixel = 0;
+                    }
+                }
+            }
+        }
+        if (iBpp == 1 && ucMask != 0x80) // store partial byte
+            *d++ = uc;
+        if (iBpp == 4 && iShift == 4) // store partial byte
+            *d++ = ucPixel;
+    } // for y
+} /* ssd1327RotateBitmap() */
 
 void ssd1327DrawLine(int x1, int y1, int x2, int y2, uint8_t ucColor)
 {
