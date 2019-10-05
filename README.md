@@ -21,7 +21,7 @@ https://github.com/bitbank2/BitBang_I2C<br>
 Features:<br>
 ---------<br>
 - 3 sizes of fixed fonts (6x8, 8x8, 16x16) with background and foreground color<br>
-- Optinal 8K RAM backing buffer for more advanced features<br>
+- Optional 8K RAM backing buffer for more advanced features<br>
 - Native line, rectangle and ellipse functions (optionally filled)<br>
 - Contrast (aka brightness) control<br>
 - Set display inverted or flipped 180 degrees<br>
