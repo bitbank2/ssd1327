@@ -31,7 +31,7 @@ uint8_t c;
 	}
       for (i=0; i<128; i++)
           ssd1327SetPixel(i, i,15);
-	ssd1327ShowBuffer(0,0,128,128);
+	ssd1327ShowBitmap(NULL,0, 0,0,128,128);
 	printf("Press ENTER to quit\n");
 	getchar();
 	ssd1327Shutdown();
