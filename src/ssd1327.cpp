@@ -585,9 +585,8 @@ unsigned char uc, ucMask;
 unsigned char c, *s, *d, ucTemp2[8];
 #ifndef USE_BACKBUFFER
 unsigned char ucTemp[40];
-#else
-int iBG;
 #endif
+int iBG;
 
 #ifdef __AVR__
   if (ucBG == -1) ucBG = 0; // no transparent text allowed

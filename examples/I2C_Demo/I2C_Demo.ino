@@ -5,7 +5,7 @@ void setup() {
   // set SDA/SCL to 0xff if using hardware I2C
   // otherwise use the Arduino pin number of Port+bit as a hex number
   // For more speed on AVR micros use port/bit notation (e.g. PORTB bit 2 --> 0xb2)
-  ssd1327Init(0x3c, 0, 0, 0xc0, 0xc2, 400000L);
+  ssd1327Init(OLED_128x128, 0x3c, 0, 0, 0xc0, 0xc2, 400000L);
   ssd1327Fill(0);
 }
 
@@ -19,11 +19,13 @@ int i;
       ssd1327WriteString(26,i*8,(char *)"6x8", FONT_SMALL, 15-i, i);
       ssd1327WriteString(46, (i & 0xfe) * 8, (char *)"16x16", FONT_LARGE, 15-i, i);
   }
+#ifndef __AVR__
   for (i=0; i<128; i++)
   {
     ssd1327SetPixel(i/2, i, i & 15);
     ssd1327SetPixel(63-(i/2), i, 15 - (i & 15));
   }
+#endif
   // Pulse contrast between darkest (0) and lightest (255)
   while (1)
   {
