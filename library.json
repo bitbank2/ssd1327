@@ -1,0 +1,27 @@
+{
+  "name":"ssd1327",
+  "description":"BitBank SSD1327+SSD1322 OLED display library.",
+  "keywords":"SSD1327,SSD1322,Arduino",
+  "authors":
+  {
+    "name": "Larry Bank",
+    "email": "bitbank@pobox.com",
+    "maintainer": true
+  },
+  "repository":
+  {
+    "type": "git",
+    "url": "https://github.com/bitbank2/ssd1327"
+  },
+  "version": "2.0.0",
+  "license": "LGPL-3.0-or-later",
+  "frameworks": "arduino",
+  "platforms": "*",
+  "dependencies": [
+    {
+      "name": "BitBang_I2C"
+    }
+  ],
+  "build": {
+  }
+}
