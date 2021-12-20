@@ -3,6 +3,7 @@
 #define FONT_NORMAL 0
 #define FONT_LARGE 1
 #define FONT_SMALL 2
+#define FONT_AA 3
 
 enum {
 OLED_128x128 = 0, // SSD1327
