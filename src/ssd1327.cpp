@@ -1034,7 +1034,7 @@ uint8_t *s;
     return; // invalid coordinates
   if (pBuffer == NULL)
   {
-    pBuffer = &ucBackbuffer[(y*iPitch)+(x/2)]; // starting point also
+    pBuffer = ucBackbuffer;
     iLocalPitch = iPitch;
   }
   ssd1327SetPosition(x, y, w, h);
