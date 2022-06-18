@@ -1,6 +1,6 @@
 //
-// SSD1327 - 128x128x16 grayscale OLED library
-// Copyright 2019 (C) BitBank Software, Inc. 
+// SSD1327 - 4-bit grayscale OLED library
+// Copyright 2019-2022 (C) BitBank Software, Inc. 
 // Project started 6/10/2019
 // Written by Larry Bank (bitbank@pobox.com)
 //
@@ -354,6 +354,18 @@ static uint8_t ssd1322_init_table[] = {
 	1, 0xa6, // set normal display mode
 	0
 };
+void ssd1329Init(int bFlip)
+{
+uint8_t ucTemp[8];
+   ucTemp[0] = 0x00; // command
+   ucTemp[1] = 0xa0; // set remap
+   if (bFlip)
+     ucTemp[2] = 0x42;
+   else
+     ucTemp[2] = 0x51; // nibble remap
+   oledWrite(ucTemp, 3);   
+} /* ssd1329Init() */
+
 void ssd1322Init(int bFlip)
 {
 uint8_t *s = (uint8_t *)ssd1322_init_table;
@@ -422,6 +434,12 @@ uint8_t uc[32];
     iPitch = 128;
     ssd1322Init(bFlip);
   }
+  else if (oled_type == OLED_96x96)
+  {
+    iMaxX = iMaxY = 96;
+    iPitch = 48;
+    ssd1329Init(bFlip);
+  }
   else
   {
     iPitch = 64;
@@ -488,7 +506,7 @@ unsigned char uc[4];
   }
 
   ssd1327Power(0); // turn off the power
-  if (oled_type == OLED_128x128)
+  if (oled_type == OLED_128x128 || oled_type == OLED_96x96)
   {
     uc[0] = 0x00; // command
     uc[1] = 0xa0; // GDDRAM mapping
@@ -567,6 +585,8 @@ unsigned char buf[8];
     buf[2] = x/2; // start address
     buf[3] = (uint8_t)(((x+cx)/2)-1); // end address
     buf[4] = 0x75; // row start/end
+//    if (oled_type == OLED_96x96)
+//       y += 32;
     buf[5] = y; // start row
     buf[6] = y+cy-1; // end row
     oledWrite(buf, 7);

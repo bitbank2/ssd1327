@@ -7,7 +7,8 @@
 
 enum {
 OLED_128x128 = 0, // SSD1327
-OLED_256x64	  // SSD1322
+OLED_256x64,	  // SSD1322
+OLED_96x96,       // SSD1329
 };
 
 #if defined(_LINUX_) && defined(__cplusplus)
